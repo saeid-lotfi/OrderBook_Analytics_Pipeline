@@ -1,0 +1,1 @@
+"""ClickHouse integration for the order-book pipeline."""

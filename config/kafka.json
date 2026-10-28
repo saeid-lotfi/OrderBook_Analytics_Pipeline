@@ -1,0 +1,21 @@
+{
+  "kafka": {
+    "bootstrap_servers": "kafka:29092",
+    "topic": {
+      "name": "order-events",
+      "partitions": 1,
+      "replication_factor": 1,
+      "config": {
+        "retention.ms": "604800000"
+      }
+    },
+    "producer": {
+      "acks": "all",
+      "enable.idempotence": true,
+      "compression.type": "gzip",
+      "linger.ms": 5,
+      "delivery.timeout.ms": 120000
+    },
+    "input_file": "data/events.jsonl"
+  }
+}
