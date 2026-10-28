@@ -1,0 +1,42 @@
+<clickhouse>
+    <listen_host>0.0.0.0</listen_host>
+    <timezone>Asia/Tehran</timezone>
+    <remote_servers>
+        <orderbook_cluster>
+            <shard>
+                <internal_replication>true</internal_replication>
+                <replica><host>clickhouse-1</host><port>9000</port><user from_env="CLICKHOUSE_USER"/><password from_env="CLICKHOUSE_PASSWORD"/></replica>
+                <replica><host>clickhouse-2</host><port>9000</port><user from_env="CLICKHOUSE_USER"/><password from_env="CLICKHOUSE_PASSWORD"/></replica>
+                <replica><host>clickhouse-3</host><port>9000</port><user from_env="CLICKHOUSE_USER"/><password from_env="CLICKHOUSE_PASSWORD"/></replica>
+            </shard>
+        </orderbook_cluster>
+    </remote_servers>
+    <macros>
+        <shard>01</shard>
+        <replica from_env="REPLICA_NAME"/>
+    </macros>
+    <default_replica_path>/clickhouse/tables/{shard}/{database}/{table}</default_replica_path>
+    <default_replica_name>{replica}</default_replica_name>
+    <zookeeper>
+        <node><host>clickhouse-1</host><port>9181</port></node>
+        <node><host>clickhouse-2</host><port>9181</port></node>
+        <node><host>clickhouse-3</host><port>9181</port></node>
+    </zookeeper>
+    <!-- Keeper is embedded in each server; all three start independently. -->
+    <keeper_server>
+        <tcp_port>9181</tcp_port>
+        <server_id from_env="KEEPER_ID"/>
+        <log_storage_path>/var/lib/clickhouse/coordination/log</log_storage_path>
+        <snapshot_storage_path>/var/lib/clickhouse/coordination/snapshots</snapshot_storage_path>
+        <coordination_settings>
+            <operation_timeout_ms>10000</operation_timeout_ms>
+            <session_timeout_ms>30000</session_timeout_ms>
+            <raft_logs_level>warning</raft_logs_level>
+        </coordination_settings>
+        <raft_configuration>
+            <server><id>1</id><hostname>clickhouse-1</hostname><port>9234</port></server>
+            <server><id>2</id><hostname>clickhouse-2</hostname><port>9234</port></server>
+            <server><id>3</id><hostname>clickhouse-3</hostname><port>9234</port></server>
+        </raft_configuration>
+    </keeper_server>
+</clickhouse>

@@ -1,0 +1,133 @@
+name: order-book
+
+x-clickhouse: &clickhouse
+  image: clickhouse/clickhouse-server:26.8.36.3
+  restart: unless-stopped
+  environment: &clickhouse-env
+    CLICKHOUSE_DB: orderbook
+    CLICKHOUSE_USER: orderbook
+    CLICKHOUSE_PASSWORD: local-dev-password
+    CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+  ulimits:
+    nofile:
+      soft: 262144
+      hard: 262144
+  healthcheck:
+    test: [CMD-SHELL, 'clickhouse-client --user "$$CLICKHOUSE_USER" --password "$$CLICKHOUSE_PASSWORD" --query "SELECT 1"']
+    interval: 10s
+    timeout: 5s
+    retries: 30
+    start_period: 30s
+
+services:
+  kafka:
+    image: apache/kafka:4.1.2
+    hostname: kafka
+    restart: unless-stopped
+    ports:
+      - '127.0.0.1:9092:9092'
+    environment:
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INTERNAL:PLAINTEXT,HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_LISTENERS: INTERNAL://:29092,HOST://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'false'
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_HEAP_OPTS: -Xms256m -Xmx512m
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: [CMD, /opt/kafka/bin/kafka-topics.sh, --bootstrap-server, 'localhost:29092', --list]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+
+  clickhouse-1:
+    <<: *clickhouse
+    hostname: clickhouse-1
+    environment:
+      <<: *clickhouse-env
+      KEEPER_ID: '1'
+      REPLICA_NAME: clickhouse-1
+    ports:
+      - '127.0.0.1:8123:8123'
+      - '127.0.0.1:9000:9000'
+    volumes:
+      - clickhouse-1-data:/var/lib/clickhouse
+      - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  clickhouse-2:
+    <<: *clickhouse
+    hostname: clickhouse-2
+    environment:
+      <<: *clickhouse-env
+      KEEPER_ID: '2'
+      REPLICA_NAME: clickhouse-2
+    ports:
+      - '127.0.0.1:8124:8123'
+      - '127.0.0.1:9001:9000'
+    volumes:
+      - clickhouse-2-data:/var/lib/clickhouse
+      - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  clickhouse-3:
+    <<: *clickhouse
+    hostname: clickhouse-3
+    environment:
+      <<: *clickhouse-env
+      KEEPER_ID: '3'
+      REPLICA_NAME: clickhouse-3
+    ports:
+      - '127.0.0.1:8125:8123'
+      - '127.0.0.1:9002:9000'
+    volumes:
+      - clickhouse-3-data:/var/lib/clickhouse
+      - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  python:
+    build:
+      context: .
+      dockerfile: docker/python/Dockerfile
+    init: true
+    command: [sleep, infinity]
+    working_dir: /workspace
+    environment:
+      PYTHONUNBUFFERED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      KAFKA_TOPIC: order-events
+      CLICKHOUSE_HOST: clickhouse-1
+      CLICKHOUSE_PORT: '8123'
+      CLICKHOUSE_DATABASE: orderbook
+      CLICKHOUSE_USER: orderbook
+      CLICKHOUSE_PASSWORD: local-dev-password
+    volumes:
+      - .:/workspace
+      - ./data:/workspace/data:ro
+    depends_on:
+      kafka:
+        condition: service_healthy
+      clickhouse-1:
+        condition: service_healthy
+      clickhouse-2:
+        condition: service_healthy
+      clickhouse-3:
+        condition: service_healthy
+
+volumes:
+  kafka-data:
+  clickhouse-1-data:
+  clickhouse-2-data:
+  clickhouse-3-data:
