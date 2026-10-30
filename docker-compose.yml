@@ -75,41 +75,89 @@ services:
     hostname: clickhouse-1
     environment:
       <<: *clickhouse-env
-      KEEPER_ID: '1'
+      SHARD_ID: '1'
       REPLICA_NAME: clickhouse-1
+      KEEPER_ID: '1'
     ports:
       - '127.0.0.1:8123:8123'
       - '127.0.0.1:9000:9000'
     volumes:
       - clickhouse-1-data:/var/lib/clickhouse
       - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./docker/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
 
   clickhouse-2:
     <<: *clickhouse
     hostname: clickhouse-2
     environment:
       <<: *clickhouse-env
-      KEEPER_ID: '2'
+      SHARD_ID: '2'
       REPLICA_NAME: clickhouse-2
+      KEEPER_ID: '2'
     ports:
       - '127.0.0.1:8124:8123'
       - '127.0.0.1:9001:9000'
     volumes:
       - clickhouse-2-data:/var/lib/clickhouse
       - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./docker/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
 
   clickhouse-3:
     <<: *clickhouse
     hostname: clickhouse-3
     environment:
       <<: *clickhouse-env
-      KEEPER_ID: '3'
+      SHARD_ID: '3'
       REPLICA_NAME: clickhouse-3
+      KEEPER_ID: '3'
     ports:
       - '127.0.0.1:8125:8123'
       - '127.0.0.1:9002:9000'
     volumes:
       - clickhouse-3-data:/var/lib/clickhouse
+      - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+      - ./docker/clickhouse/keeper.xml:/etc/clickhouse-server/config.d/keeper.xml:ro
+
+  clickhouse-4:
+    <<: *clickhouse
+    hostname: clickhouse-4
+    environment:
+      <<: *clickhouse-env
+      SHARD_ID: '1'
+      REPLICA_NAME: clickhouse-4
+    ports:
+      - '127.0.0.1:8126:8123'
+      - '127.0.0.1:9003:9000'
+    volumes:
+      - clickhouse-4-data:/var/lib/clickhouse
+      - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  clickhouse-5:
+    <<: *clickhouse
+    hostname: clickhouse-5
+    environment:
+      <<: *clickhouse-env
+      SHARD_ID: '2'
+      REPLICA_NAME: clickhouse-5
+    ports:
+      - '127.0.0.1:8127:8123'
+      - '127.0.0.1:9004:9000'
+    volumes:
+      - clickhouse-5-data:/var/lib/clickhouse
+      - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
+
+  clickhouse-6:
+    <<: *clickhouse
+    hostname: clickhouse-6
+    environment:
+      <<: *clickhouse-env
+      SHARD_ID: '3'
+      REPLICA_NAME: clickhouse-6
+    ports:
+      - '127.0.0.1:8128:8123'
+      - '127.0.0.1:9005:9000'
+    volumes:
+      - clickhouse-6-data:/var/lib/clickhouse
       - ./docker/clickhouse/cluster.xml:/etc/clickhouse-server/config.d/cluster.xml:ro
 
   python:
@@ -117,20 +165,21 @@ services:
       context: .
       dockerfile: docker/python/Dockerfile
     init: true
-    command: [sleep, infinity]
+    command: [python, -m, src.orderbook.run]
     working_dir: /workspace
     environment:
       PYTHONUNBUFFERED: '1'
       PYTHONDONTWRITEBYTECODE: '1'
-      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      CLICKHOUSE_HOST: clickhouse-1
-      CLICKHOUSE_PORT: '8123'
-      CLICKHOUSE_DATABASE: orderbook
-      CLICKHOUSE_USER: orderbook
-      CLICKHOUSE_PASSWORD: local-dev-password
     volumes:
       - .:/workspace
       - ./data:/workspace/data:ro
+      - ./task:/workspace/task:ro
+    healthcheck:
+      test: [CMD, python, -m, src.orderbook.health]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
     depends_on:
       kafka:
         condition: service_healthy
@@ -140,9 +189,18 @@ services:
         condition: service_healthy
       clickhouse-3:
         condition: service_healthy
+      clickhouse-4:
+        condition: service_healthy
+      clickhouse-5:
+        condition: service_healthy
+      clickhouse-6:
+        condition: service_healthy
 
 volumes:
   kafka-data:
   clickhouse-1-data:
   clickhouse-2-data:
   clickhouse-3-data:
+  clickhouse-4-data:
+  clickhouse-5-data:
+  clickhouse-6-data:

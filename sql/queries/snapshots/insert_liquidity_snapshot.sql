@@ -1,8 +1,11 @@
 INSERT INTO {database}.liquidity_metrics_history
 (
     snapshot_at,
+    source_as_of,
     market_id,
     quote_currency,
+    bids,
+    asks,
     best_bid,
     best_ask,
     second_bid,
@@ -23,8 +26,11 @@ INSERT INTO {database}.liquidity_metrics_history
 )
 SELECT
     now64(3, 'Asia/Tehran') AS snapshot_at,
+    (SELECT maxOrNull(event_ts) FROM {database}.orders_current) AS source_as_of,
     market_id,
     quote_currency,
+    bids,
+    asks,
     best_bid,
     best_ask,
     second_bid,
@@ -42,4 +48,5 @@ SELECT
     fill_thresholds,
     bid_fill_impact,
     ask_fill_impact
-FROM {database}.liquidity_metrics;
+FROM {database}.liquidity_metrics
+SETTINGS distributed_foreground_insert = 1, insert_quorum = 2;

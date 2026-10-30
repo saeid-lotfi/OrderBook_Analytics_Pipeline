@@ -51,6 +51,7 @@ class ClickHouseManager:
             username=self.connection_config["username"],
             password=self.connection_config["password"],
             database="default",
+            settings={"load_balancing": "in_order", "distributed_foreground_insert": 1},
             connect_timeout=self.connection_config.get(
                 "timeout", 30
             ),

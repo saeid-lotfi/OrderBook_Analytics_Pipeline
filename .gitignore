@@ -1,2 +1,5 @@
 data/*
 task/*
+__pycache__/
+*.py[cod]
+.venv/

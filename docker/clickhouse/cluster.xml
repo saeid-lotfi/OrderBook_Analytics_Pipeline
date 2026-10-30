@@ -1,36 +1,51 @@
 <?xml version="1.0"?>
 <clickhouse>
+    <macros>
+        <shard from_env="SHARD_ID"/>
+        <replica from_env="REPLICA_NAME"/>
+    </macros>
     <remote_servers>
         <orderbook_cluster>
             <shard>
-                <internal_replication>false</internal_replication>
+                <internal_replication>true</internal_replication>
                 <replica>
-                    <host>clickhouse-1</host>
-                    <port>9000</port>
-                    <user>orderbook</user>
-                    <password>local-dev-password</password>
+                    <host>clickhouse-1</host><port>9000</port>
+                    <user>orderbook</user><password>local-dev-password</password>
+                </replica>
+                <replica>
+                    <host>clickhouse-4</host><port>9000</port>
+                    <user>orderbook</user><password>local-dev-password</password>
                 </replica>
             </shard>
-
             <shard>
-                <internal_replication>false</internal_replication>
+                <internal_replication>true</internal_replication>
                 <replica>
-                    <host>clickhouse-2</host>
-                    <port>9000</port>
-                    <user>orderbook</user>
-                    <password>local-dev-password</password>
+                    <host>clickhouse-2</host><port>9000</port>
+                    <user>orderbook</user><password>local-dev-password</password>
+                </replica>
+                <replica>
+                    <host>clickhouse-5</host><port>9000</port>
+                    <user>orderbook</user><password>local-dev-password</password>
                 </replica>
             </shard>
-
             <shard>
-                <internal_replication>false</internal_replication>
+                <internal_replication>true</internal_replication>
                 <replica>
-                    <host>clickhouse-3</host>
-                    <port>9000</port>
-                    <user>orderbook</user>
-                    <password>local-dev-password</password>
+                    <host>clickhouse-3</host><port>9000</port>
+                    <user>orderbook</user><password>local-dev-password</password>
+                </replica>
+                <replica>
+                    <host>clickhouse-6</host><port>9000</port>
+                    <user>orderbook</user><password>local-dev-password</password>
                 </replica>
             </shard>
         </orderbook_cluster>
     </remote_servers>
+    <zookeeper>
+        <node><host>clickhouse-1</host><port>9181</port></node>
+        <node><host>clickhouse-2</host><port>9181</port></node>
+        <node><host>clickhouse-3</host><port>9181</port></node>
+    </zookeeper>
+    <distributed_ddl><path>/clickhouse/task_queue/ddl</path></distributed_ddl>
+    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
 </clickhouse>

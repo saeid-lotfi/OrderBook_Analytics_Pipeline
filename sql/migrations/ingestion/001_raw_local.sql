@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS {database}.raw_events_local
     ingested_at DateTime64(3, 'Asia/Tehran')
         DEFAULT now64(3, 'Asia/Tehran')
 )
-ENGINE = MergeTree
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{shard}}/{database}/raw_events_local', '{{replica}}')
 PARTITION BY toYYYYMM(ingested_at)
 ORDER BY (kafka_topic, kafka_partition, kafka_offset)
 TTL ingested_at + INTERVAL 7 DAY DELETE;

@@ -1,4 +1,4 @@
-CREATE VIEW IF NOT EXISTS {database}.liquidity_metrics
+CREATE OR REPLACE VIEW {database}.liquidity_metrics
 AS
 WITH
     [
@@ -13,6 +13,8 @@ SELECT
     market_id,
 
     quote_currency,
+    bids,
+    asks,
 
     best_bid,
     best_ask,
@@ -106,7 +108,7 @@ SELECT
                     bid_cumulative
                 ) = 0,
                 NULL,
-                (
+                divideDecimal(
                     best_bid
                     -
                     tupleElement(
@@ -119,7 +121,8 @@ SELECT
                         ),
                         1
                     )
-                ) / best_bid
+                    , best_bid, 18
+                )
             ),
         thresholds
     ) AS bid_fill_impact,
@@ -134,7 +137,7 @@ SELECT
                     ask_cumulative
                 ) = 0,
                 NULL,
-                (
+                divideDecimal(
                     tupleElement(
                         arrayElementOrNull(
                             asks,
@@ -147,7 +150,8 @@ SELECT
                     )
                     -
                     best_ask
-                ) / best_ask
+                    , best_ask, 18
+                )
             ),
         thresholds
     ) AS ask_fill_impact
@@ -155,7 +159,7 @@ SELECT
 FROM
 (
     SELECT
-        ladders.market_id AS market_id,
+        markets.market_id AS market_id,
         ladders.bids AS bids,
         ladders.asks AS asks,
 
@@ -216,8 +220,8 @@ FROM
             arrayMap(level -> level.3, asks)
         ) AS ask_cumulative
 
-    FROM {database}.book_ladders AS ladders
+    FROM {database}.markets AS markets
 
-    INNER JOIN {database}.markets AS markets
+    LEFT JOIN {database}.book_ladders AS ladders
         ON ladders.market_id = markets.market_id
 );

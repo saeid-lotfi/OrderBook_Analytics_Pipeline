@@ -2,14 +2,12 @@
   "clickhouse": {
     "cluster": "orderbook_cluster",
     "database": "orderbook",
-
     "connection": {
       "username": "orderbook",
       "password": "local-dev-password",
       "port": 8123,
       "timeout": 30
     },
-
     "nodes": [
       {
         "name": "clickhouse-1",
@@ -22,28 +20,20 @@
       {
         "name": "clickhouse-3",
         "host": "clickhouse-3"
+      },
+      {
+        "name": "clickhouse-4",
+        "host": "clickhouse-4"
+      },
+      {
+        "name": "clickhouse-5",
+        "host": "clickhouse-5"
+      },
+      {
+        "name": "clickhouse-6",
+        "host": "clickhouse-6"
       }
     ],
-
-    "kafka": {
-      "bootstrap_servers": "kafka:29092",
-      "topic": "order-events",
-      "consumer_group": "clickhouse-orderbook-raw-v1",
-      "consumers": 1,
-      "max_block_size": 1000
-    },
-
-    "tables": {
-      "raw_local": "raw_events_local",
-      "raw_distributed": "raw_events",
-      "kafka_engine": "kafka_events_queue",
-      "materialized_view": "mv_kafka_to_raw"
-    },
-
-    "retention": {
-      "raw_days": 7
-    },
-
     "migrations": {
       "directory": "sql/migrations"
     }

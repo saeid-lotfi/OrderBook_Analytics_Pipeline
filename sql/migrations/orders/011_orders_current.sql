@@ -43,8 +43,8 @@ FROM
                 settled_in_match,
                 event_ts
             ),
-            tuple(lsn, kafka_offset)
+            tuple(lsn, kafka_partition, kafka_offset)
         ) AS latest
-    FROM {database}.orders_versions
+    FROM {database}.orders_latest
     GROUP BY id
 );

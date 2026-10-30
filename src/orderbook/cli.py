@@ -69,11 +69,7 @@ def main() -> None:
         if args.command == "create-topic":
             create_topic(settings)
 
-        elif args.command == "produce":
-            create_topic(settings)
-            produce_events(settings, args.file)
-
-        elif args.command == "setup":
+        elif args.command in ("produce", "setup"):
             create_topic(settings)
             produce_events(settings, args.file)
 

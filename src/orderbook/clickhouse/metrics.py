@@ -2,6 +2,7 @@ import argparse
 import time
 from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from .client import (
     ClickHouseManager,
@@ -24,7 +25,7 @@ class MetricsManager:
         """Insert one snapshot of all current market metrics."""
 
         sql = Path(
-            "sql/queries/insert_liquidity_snapshot.sql"
+            "sql/queries/snapshots/insert_liquidity_snapshot.sql"
         ).read_text(encoding="utf-8")
 
         sql = sql.format(database=self.database)
@@ -32,7 +33,7 @@ class MetricsManager:
         self.manager.execute(self.host, sql)
 
         print(
-            f"[{datetime.now().isoformat(timespec='seconds')}] "
+            f"[{datetime.now(ZoneInfo('Asia/Tehran')).isoformat(timespec='seconds')}] "
             "Liquidity snapshot inserted.",
             flush=True,
         )

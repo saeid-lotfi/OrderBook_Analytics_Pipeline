@@ -4,5 +4,5 @@ CREATE TABLE IF NOT EXISTS {database}.markets
     code String,
     quote_ccy LowCardinality(String)
 )
-ENGINE = MergeTree
+ENGINE = ReplicatedMergeTree('/clickhouse/reference/{database}/markets', '{{replica}}')
 ORDER BY market_id;

@@ -33,7 +33,7 @@ class MigrationRunner:
     def execute_migration(
         self,
         filename: str,
-        all_nodes: bool = False,
+        all_nodes: bool = True,
     ) -> None:
         sql = self.read_sql(filename)
 
@@ -54,67 +54,70 @@ class MigrationRunner:
 
     def create_raw_local_tables(self) -> None:
         self.execute_migration(
-            "001_raw_local.sql",
+            "ingestion/001_raw_local.sql",
             all_nodes=True,
         )
 
     def create_distributed_table(self) -> None:
-        self.execute_migration("002_raw_distributed.sql")
+        self.execute_migration("ingestion/002_raw_distributed.sql")
 
     def create_kafka_engine(self) -> None:
-        self.execute_migration("003_kafka_engine.sql")
+        self.execute_migration("ingestion/003_kafka_engine.sql", all_nodes=False)
 
     def create_materialized_view(self) -> None:
-        self.execute_migration("004_kafka_materialized_view.sql")
+        self.execute_migration("ingestion/004_kafka_materialized_view.sql", all_nodes=False)
 
     def create_typed_tables(self) -> None:
         self.execute_migration(
-            "005_orders_versions_local.sql",
+            "orders/005_orders_versions_local.sql",
             all_nodes=True,
         )
 
-        self.execute_migration("006_orders_versions_distributed.sql")
+        self.execute_migration("orders/006_orders_versions_distributed.sql")
 
     def create_dead_letter_tables(self) -> None:
         self.execute_migration(
-            "007_dead_letter_local.sql",
+            "validation/007_dead_letter_local.sql",
             all_nodes=True,
         )
 
-        self.execute_migration("008_dead_letter_distributed.sql")
+        self.execute_migration("validation/008_dead_letter_distributed.sql")
 
     def create_parsing_views(self) -> None:
         self.execute_migration(
-            "009_mv_raw_to_versions.sql",
+            "validation/009_mv_raw_to_versions.sql",
             all_nodes=True,
         )
 
         self.execute_migration(
-            "010_mv_raw_to_dead_letter.sql",
+            "validation/010_mv_raw_to_dead_letter.sql",
             all_nodes=True,
         )
 
     def create_order_views(self) -> None:
-        self.execute_migration("011_orders_current.sql")
-        self.execute_migration("012_live_orders.sql")
+        self.execute_migration("orders/011a_orders_latest_local.sql")
+        self.execute_migration("orders/011b_orders_latest_distributed.sql")
+        self.execute_migration("orders/011c_mv_versions_to_latest.sql")
+        self.execute_migration("orders/011_orders_current.sql")
+        self.execute_migration("book/012_live_orders.sql")
 
     def create_metric_views(self) -> None:
         """Create the order-book and liquidity metric views."""
 
-        self.execute_migration("013_book_levels.sql")
-        self.execute_migration("014_book_ladders.sql")
-        self.execute_migration("015_liquidity_metrics.sql")
+        self.execute_migration("book/013_book_levels.sql")
+        self.execute_migration("book/014_book_ladders.sql")
+        self.execute_migration("book/015_liquidity_metrics.sql")
 
     def create_metric_history(self) -> None:
         """Create snapshot storage across all three shards."""
 
         self.execute_migration(
-            "016_liquidity_metrics_history.sql",
+            "snapshots/016_liquidity_metrics_history.sql",
             all_nodes=True,
         )
 
         self.execute_migration(
-            "017_liquidity_metrics_history_distributed.sql"
+            "snapshots/017_liquidity_metrics_history_distributed.sql"
         )
 
     def setup_metrics(self) -> None:
@@ -124,6 +127,8 @@ class MigrationRunner:
 
         self.create_metric_views()
         self.create_metric_history()
+        self.execute_migration("serving/020_current_book.sql")
+        self.execute_migration("serving/021_current_book_levels.sql")
 
         print("Liquidity metric infrastructure created.")
 
@@ -142,7 +147,7 @@ class MigrationRunner:
         self.create_database()
 
         # 2. Create market reference table FIRST
-        self.execute_migration("018_markets.sql")
+        self.execute_migration("reference/018_markets.sql")
 
         # 3. Create raw CDC infrastructure
         self.create_raw_local_tables()

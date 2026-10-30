@@ -12,4 +12,5 @@ SELECT
 
     now64(3, 'Asia/Tehran') AS ingested_at
 
-FROM {database}.kafka_events_queue;
+FROM {database}.kafka_events_queue
+SETTINGS distributed_foreground_insert = 1, insert_quorum = 2;
