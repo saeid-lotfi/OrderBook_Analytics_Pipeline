@@ -11,26 +11,26 @@ Run commands from the repository root. Python 3.12 and the two pinned direct dep
 | `docker/clickhouse/keeper.xml` | Embedded three-member Keeper quorum on nodes 1–3 |
 | `config/kafka.json` | Producer endpoint/options, one-partition topic, seven-day broker retention, JSONL input path |
 | `config/clickhouse.json` | Six DDL targets, query coordinator, credentials, timeouts, migration directory |
-| `sql/migrations/ingestion/003_kafka_engine.sql` | ClickHouse consumer broker/topic/group and batch settings |
-| `sql/migrations/<layer>/*.sql` | Table/view schemas, routing, predicates, types and TTLs |
-| `sql/queries/snapshots/insert_liquidity_snapshot.sql` | Persisted snapshot column contract and write settings |
+| `sql/01_migrations/02_ingestion/kafka_engine.sql` | ClickHouse consumer broker/topic/group and batch settings |
+| `sql/01_migrations/<layer>/*.sql` | Table/view schemas, routing, predicates, types and TTLs |
+| `sql/02_queries/01_snapshots/insert_liquidity_snapshot.sql` | Persisted snapshot column contract and write settings |
 
 The Kafka engine DDL and producer JSON must agree on broker/topic. These settings are not environment overrides. The previous unused ClickHouse config sections for Kafka, table names and retention were removed because changing them had no effect. Retention belongs to the SQL DDL, and changing an existing table requires an ALTER or the documented clean rebuild. This repository's setup is intended for an empty deployment, not an online conversion of old unreplicated volumes.
 
 ## Apply order and tables
 
-SQL files are grouped by architectural layer; see [the SQL directory guide](../sql/README.md). Folder names describe responsibilities, not execution order.
+SQL files are grouped by architectural layer; see [the SQL directory guide](SQL.md). Numeric directory prefixes make the schema-layer order visible. The runner handles dependencies within and between those layers, including attaching the Kafka consumer last.
 
-The executable apply order is `src/orderbook/clickhouse/migrations.py`, not lexicographic filename order. Numeric prefixes on the original migrations are preserved, with explicit dependency ordering for additions:
+The executable apply order is `src/orderbook/clickhouse/migrations.py`, not lexicographic filename order. SQL filenames describe their objects; directory prefixes show the layer order. Dependencies are applied explicitly:
 
-1. Database on all six nodes; `018_markets.sql` reference table.
-2. `001` local raw tables; `002` Distributed raw wrappers.
-3. `005`/`006` typed version tables; `007`/`008` dead-letter tables.
-4. `009`/`010` raw parsing and rejection materialized views.
-5. `011a` local retained latest state; `011b` Distributed wrapper; `011c` version-to-latest materialized view; `011` current-state view; `012` resting candidates.
-6. `013` levels, `014` ladders, `015` metrics.
-7. `016` local snapshot history including ladders/source timestamp; `017` Distributed history inheriting that schema; `020` current snapshot view; `021` serving levels.
-8. `003` Kafka engine and `004` Kafka-to-raw materialized view on node 1, after all destinations exist.
+1. Database on all six nodes; `markets.sql` reference table.
+2. `raw_local.sql` and `raw_distributed.sql` landing tables.
+3. `orders_versions_local.sql` / `orders_versions_distributed.sql`, then dead-letter local and Distributed tables.
+4. `mv_raw_to_versions.sql` and `mv_raw_to_dead_letter.sql` parsing views.
+5. `orders_latest_local.sql`, `orders_latest_distributed.sql`, `mv_versions_to_latest.sql`, `orders_current.sql`, then `live_orders.sql`.
+6. `book_levels.sql`, `book_ladders.sql`, then `liquidity_metrics.sql`.
+7. `liquidity_metrics_history.sql` and its Distributed wrapper, then `current_book.sql` and `current_book_levels.sql`.
+8. `kafka_engine.sql` and `kafka_materialized_view.sql` on node 1, after all destinations exist.
 
 DDL is submitted directly to every node instead of using `ON CLUSTER`; the configured six-node list is authoritative for installation. Setup uses CREATE IF NOT EXISTS; selected derivation views use CREATE OR REPLACE. It does not backfill materialized views from existing history. In particular, this is why an old pre-latest-state installation must be rebuilt cleanly. Stopping the worker does not detach Kafka ingestion.
 
@@ -44,7 +44,7 @@ DDL is submitted directly to every node instead of using `ON CLUSTER`; the confi
 | `mv_raw_to_versions`, `mv_raw_to_dead_letter` | Complementary validation routes on insert |
 | `orders_latest_local` / `orders_latest` | ReplicatedReplacingMergeTree(LSN) / Distributed, retained state including terminal images |
 | `mv_versions_to_latest` | Sends each accepted version to retained state |
-| `orders_current` | Global argMax of one complete tuple per order ID |
+| `orders_current` | Thin FINAL read of retained LSN-versioned state |
 | `live_orders` | Candidate resting predicate before date and positive-price filter |
 | `book_levels` | Date/price-filtered aggregated base and quote sizes |
 | `book_ladders` | Ordered arrays of distinct levels for markets with liquidity |
@@ -54,11 +54,17 @@ DDL is submitted directly to every node instead of using `ON CLUSTER`; the confi
 | `current_book` | Latest persisted row per market within 30 seconds |
 | `current_book_levels` | ARRAY JOIN of persisted bid/ask arrays, chart-friendly rows |
 
-Merges compact latest state eventually. Queries still use argMax, so correctness does not depend on OPTIMIZE or merge timing. The latest-state partition key depends only on ID, ensuring all versions meet in one partition. Event history retains repeated deliveries for audit; logical current state reconciles them. Deletes must retain their LSN and tombstone; filtering deletes before reconciliation resurrects prior active images.
+Merges compact latest state eventually. Current-order queries use FINAL on the Distributed latest-state table, propagated to each shard, so correctness does not depend on OPTIMIZE or merge timing. The latest-state partition key depends only on ID, ensuring all versions meet in one partition. Event history retains repeated deliveries for audit; logical current state reconciles them. Deletes must retain their LSN and tombstone; filtering deletes before reconciliation resurrects prior active images.
+
+Raw, accepted-version and dead-letter history use `toYYYYMMDD(ingested_at)` partitions with seven-day row TTLs. Snapshot history already uses `toYYYYMMDD(snapshot_at)`. Daily boundaries use Asia/Tehran, matching the timestamp columns. TTL cleanup remains asynchronous; daily partitions do not round retention down to calendar days. Latest state intentionally retains ID-hash partitions and has no TTL: daily ingestion partitions would split an order's versions across partitions and prevent background replacement across days.
+
+### Applying this change to existing data
+
+Setup replaces `orders_current` in place, but CREATE TABLE IF NOT EXISTS does not change existing partition keys. Existing history tables need a controlled rebuild or an explicit table migration; ClickHouse cannot ALTER the partition key in place. Do not drop volumes containing the only retained latest state: seven-day history cannot recover older orders or tombstones. For a data-preserving migration, pause ingestion and snapshot scheduling, drain pending writes and replication, back up retained state, create replacement local history tables with new Keeper paths and daily partitions, copy unexpired history, recreate their Distributed wrappers and materialized-view dependencies, verify counts and LSNs, then switch and resume. Keep old tables until verification is complete. This repository does not automate that online migration. A clean fixture deployment can instead rebuild from the complete preserved source.
 
 ## Sharding, replication and failure boundaries
 
-Orders are keyed by global order ID, not market/service/user. Hashing the same string form of ID in raw, version and latest wrappers co-locates all versions. Malformed payloads without a usable ID route by raw message hash. Book derivation globally reconciles IDs and then aggregates by market/side/price; markets span shards. Never sum shard-local resting books unless the placement invariant and per-ID reconciliation are guaranteed. If shard-local filtering removes a newer terminal image, an older active version elsewhere can survive.
+Orders are keyed by global order ID, not market/service/user. Hashing the same string form of ID in raw, version and latest wrappers co-locates all versions. Malformed payloads without a usable ID route by raw message hash. Book derivation reconciles IDs within each shard using FINAL and then aggregates by market/side/price; markets span shards. Cross-shard duplicate IDs are not reconciled. Never sum shard-local resting books unless the placement invariant and per-ID reconciliation are guaranteed. If shard-local filtering removes a newer terminal image, an older active version elsewhere can survive.
 
 Each shard's raw, version, latest, rejection and history tables share a Keeper path only with their paired replica. Reference markets deliberately share one path across all six nodes. Distributed reads address one replica per shard. `clusterAllReplicas` is for diagnostics and physical-copy accounting; summing it as a business dataset doubles data. All nodes expose Distributed wrappers and serving views, so an available coordinator can read other shards even if a preferred replica is down.
 
@@ -84,7 +90,7 @@ docker compose exec -T python python scripts/check_metrics.py
 docker compose exec -T python python scripts/check_pipeline.py
 
 # Defect counts, captured rows, topology and replication queues.
-docker compose exec -T clickhouse-1 clickhouse-client --user orderbook --password local-dev-password --database orderbook --multiquery < sql/queries/monitoring/diagnostics.sql
+docker compose exec -T clickhouse-1 clickhouse-client --user orderbook --password local-dev-password --database orderbook --multiquery < sql/02_queries/02_monitoring/diagnostics.sql
 
 # Kafka UI starts with the default stack: http://localhost:8080.
 docker compose logs --tail 50 akhq
@@ -106,7 +112,7 @@ docker compose exec -T python python -m src.orderbook.clickhouse.metrics show
 
 ## Monitoring contract
 
-`sql/queries/monitoring/alerts.sql` contains executable checks. In a live deployment, run them every ten seconds and page on:
+`sql/02_queries/02_monitoring/alerts.sql` contains executable checks. In a live deployment, run them every ten seconds and page on:
 
 | Condition | Threshold / action |
 |---|---|

@@ -35,7 +35,7 @@
       }
     ],
     "migrations": {
-      "directory": "sql/migrations"
+      "directory": "sql/01_migrations"
     }
   }
 }

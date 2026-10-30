@@ -2,6 +2,8 @@
 
 Reconstructs a limit order book from Kafka CDC events using ClickHouse SQL, then persists liquidity snapshots every ten seconds. Start with [FINDINGS.md](FINDINGS.md) for the measured accuracy and limits. This is a historical replay, not a live exchange feed.
 
+Project documentation lives together here: [operations](OPERATIONS.md), [SQL layout](SQL.md), [validation](VALIDATION.md), and [findings](FINDINGS.md). Run all shell commands from the repository root (the parent of `docs/`). The supplied task definition remains under `task/`.
+
 ## Run from a clean checkout
 
 Requirements: Docker Engine with Compose v2, network access for images/packages, and the supplied dataset. Allocate at least 12 GB RAM and 6 CPUs for six ClickHouse processes, Kafka, and Python; this is development guidance, not a production capacity claim. Host ports 8123–8128, 9000–9005, 8080 and 9092 must be free.
@@ -58,7 +60,7 @@ flowchart LR
   S --> V[Typed version history]
   S --> D[Dead-letter history]
   V --> L[Retained latest order state]
-  L --> C[Global argMax by order ID and LSN]
+  L --> C[FINAL read of LSN-replaced state]
   C --> B[Resting predicate and source-day heuristic]
   B --> M[Levels, ladders, liquidity metrics]
   M --> H[Ten-second replicated snapshots]
@@ -69,15 +71,15 @@ Raw routing uses `cityHash64(toString(id))` for valid IDs and a message hash oth
 
 SQL is installed on all six nodes by the migration runner; the Kafka engine and its materialized view are installed only on node 1. Parsing materialized views run on whichever replica receives the original insert. Their target tables are also replicated; part replication does not rerun parsing on the peer. Kafka-to-raw and snapshot inserts request foreground Distributed delivery and quorum two. This improves acknowledgement durability, but the chained views and Kafka offset commit are not a transaction across tables. Monitor routing and replication errors and retain replayable inputs.
 
-All serving views exist on every node. Distributed reads select one replica per shard, avoiding double-counting. Global `argMax` still reconciles versions if an ID accidentally appears on multiple shards; summing independently filtered shard-local latest rows would double-count or resurrect an older version. Changing shard count requires explicit resharding. See [architecture and operations](docs/OPERATIONS.md) for details.
+All serving views exist on every node. Distributed reads select one replica per shard, avoiding double-counting. `orders_current` reads retained `ReplacingMergeTree(lsn)` state with `FINAL`, resolving pending replacements on each shard before live-order filtering. All versions of an ID must stay on the same shard; misplaced versions across shards are not reconciled. Changing shard count requires explicit resharding. See [architecture and operations](OPERATIONS.md) for details.
 
 ## SQL layout
 
-The SQL folders follow the pipeline layers: reference → ingestion → validation → orders → book → snapshots → serving. Scheduled snapshot queries and monitoring queries are grouped separately. See the [SQL architecture guide](sql/README.md) for the directory tree, dependencies and execution order.
+The SQL folders follow the pipeline layers: 01_reference → 02_ingestion → 03_orders → 04_validation → 05_book → 06_snapshots → 07_serving. Scheduled snapshot queries and monitoring queries are grouped separately. See the [SQL architecture guide](SQL.md) for the directory tree, dependencies and execution order.
 
 ## Book semantics and metric contract
 
-`__LSN` determines source precedence. Arrival offset, Kafka time, update time, and creation time do not. Current state is selected before applying any live-order filters; otherwise an old active image can survive its later close/delete. Equal-LSN redeliveries are assumed identical; offsets break query ties, but conflicting same-LSN images need a source contract.
+`__LSN` determines source precedence. Arrival offset, Kafka time, update time, and creation time do not. Current state is selected before applying any live-order filters; otherwise an old active image can survive its later close/delete. Equal-LSN redeliveries are assumed identical; replacement does not define a source-level winner for conflicting same-LSN images, which need a source contract.
 
 A resting candidate has `op != 'd'`, `mode = 'limit'`, `state = 'active'`, no cancel request, no settled-in-match flag, positive `amount1 - exchanged1`, and positive price. Bots and all services remain included. We then keep only candidates whose latest commit is on the latest observed source date in `Asia/Tehran`. This is the explicit stale-order heuristic, inferred from events, not from ground truth and not from today's wall clock. It excludes genuine unchanged overnight orders and fails if stale images receive fresh commits. A future-dated outlier can also advance the cutoff incorrectly.
 
@@ -114,9 +116,9 @@ WHERE snapshot_at >= toDateTime('2026-10-30 00:00:00', 'Asia/Tehran')
   AND market_id = 1 ORDER BY snapshot_at;
 ```
 
-Snapshots run every ten seconds, subtracting computation time from the interval. The final small-fixture check averaged 331.5 ms across four inserts (363 ms maximum), supporting that cadence locally; see the [validation record](docs/VALIDATION.md) for its limits. If a run takes longer, the next starts immediately; jobs never overlap. `snapshot_at` is the query start time. A market falls out of `current_book` automatically once its latest snapshot is older than 30 seconds, even if historical rows remain. `source_as_of` separately exposes source progress: a fresh computation over the August fixture is still historical data. Production needs feed heartbeat/sequence monitoring; computation freshness alone cannot prove exchange freshness.
+Snapshots run every ten seconds, subtracting computation time from the interval. The final small-fixture check averaged 331.5 ms across four inserts (363 ms maximum), supporting that cadence locally; see the [validation record](VALIDATION.md) for its limits. If a run takes longer, the next starts immediately; jobs never overlap. `snapshot_at` is the query start time. A market falls out of `current_book` automatically once its latest snapshot is older than 30 seconds, even if historical rows remain. `source_as_of` separately exposes source progress: a fresh computation over the August fixture is still historical data. Production needs feed heartbeat/sequence monitoring; computation freshness alone cannot prove exchange freshness.
 
-Raw events, typed versions, dead letters, and snapshots have seven-day TTLs based on ingestion/snapshot time, not the old fixture's event time. TTL deletion is asynchronous. Raw/dead-letter partitions are monthly, snapshots daily, and version partitions use 16 stable ID buckets. The latest-state table has no TTL and compacts to one image per ID, including tombstones. It prevents dormant-order loss or resurrection after history expiry, but distinct historical IDs still accumulate. Safe tombstone retirement requires a replay watermark and authoritative checkpoint; arbitrary expiry would sacrifice correctness.
+Raw events, typed versions, dead letters, and snapshots have seven-day TTLs based on ingestion/snapshot time, not the old fixture's event time. TTL deletion is asynchronous. Raw, dead-letter, version-history and snapshot partitions are daily. The latest-state table has no TTL and compacts to one image per ID, including tombstones. It prevents dormant-order loss or resurrection after history expiry, but distinct historical IDs still accumulate. Safe tombstone retirement requires a replay watermark and authoritative checkpoint; arbitrary expiry would sacrifice correctness.
 
 ## Task coverage and next stage
 

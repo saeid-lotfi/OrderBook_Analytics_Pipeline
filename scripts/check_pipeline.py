@@ -32,6 +32,11 @@ def main():
         FULL OUTER JOIN {db}.orders_current c ON v.id=c.id
         WHERE v.id != c.id OR v.expected_lsn != c.lsn''')[0][0]
     assert mismatch == 0, f'{mismatch} current states differ from maximum source LSN'
+    duplicates = query(f'SELECT count() - uniqExact(id) FROM {db}.orders_current')[0][0]
+    assert duplicates == 0, f'{duplicates} duplicate current order IDs'
+    for table in ('raw_events_local', 'orders_versions_local', 'dead_letter_events_local'):
+        ddl = query(f'SHOW CREATE TABLE {db}.{table}')[0][0]
+        assert 'PARTITION BY toYYYYMMDD(ingested_at)' in ddl, (table, ddl)
     topology = query("SELECT shard_num, count() FROM system.clusters "
                      "WHERE cluster='orderbook_cluster' GROUP BY shard_num ORDER BY shard_num")
     assert topology == [(1, 2), (2, 2), (3, 2)], topology

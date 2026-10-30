@@ -40,6 +40,6 @@ CREATE TABLE IF NOT EXISTS {database}.orders_versions_local
     ingested_at DateTime64(3, 'Asia/Tehran')
 )
 ENGINE = ReplicatedMergeTree('/clickhouse/tables/{{shard}}/{database}/orders_versions_local', '{{replica}}')
-PARTITION BY cityHash64(id) % 16
+PARTITION BY toYYYYMMDD(ingested_at)
 ORDER BY (id, lsn, kafka_topic, kafka_partition, kafka_offset)
 TTL ingested_at + INTERVAL 7 DAY DELETE;

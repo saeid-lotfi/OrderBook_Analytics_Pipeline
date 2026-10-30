@@ -34,7 +34,7 @@ docker compose exec -T python python scripts/check_pipeline.py
 | Oracle touch comparison | 30/31 literal decimal matches; 31/31 within one oracle binary64 ULP |
 | Independent metric checks | Passed for all 36 markets, including empty sides |
 
-The independent checks cover sorted distinct prices, best/second prices, gaps, spread, crossed flags, base × price notional, inclusive band counts/sums, currency-specific thresholds, insufficient-depth nulls, and fill impacts to 18 fractional places. They found and drove a fix to the previous seven-place fill-impact truncation. Oracle scalar comparison reports one spread discrepancy for BTC_IRT, explained in [FINDINGS.md](../FINDINGS.md); the pipeline's decimal subtraction is retained.
+The independent checks cover sorted distinct prices, best/second prices, gaps, spread, crossed flags, base × price notional, inclusive band counts/sums, currency-specific thresholds, insufficient-depth nulls, and fill impacts to 18 fractional places. They found and drove a fix to the previous seven-place fill-impact truncation. Oracle scalar comparison reports one spread discrepancy for BTC_IRT, explained in [FINDINGS.md](FINDINGS.md); the pipeline's decimal subtraction is retained.
 
 On the final run, four completed scheduled inserts averaged **331.5 ms**, with a maximum **363 ms** and peak coordinator query memory **45,390,354 bytes** reported by `system.query_log`. This small sample leaves substantial room within a ten-second interval locally. It is not a production-scale load test, and memory excludes other nodes and background work.
 
@@ -57,4 +57,16 @@ No production pipeline module reads ground truth. The scoring script is a separa
 
 ## AKHQ and SQL cleanup follow-up
 
-Rebuilt from empty volumes with AKHQ enabled in the default Compose stack. AKHQ returned HTTP 200 and reported healthy. Folded the snapshot ladder/source timestamp columns into migration `016`, removed the redundant `019` ALTER migration and its Python setup calls, and verified that all 23 remaining migrations are referenced. All three validation scripts passed again after ingestion settled. An earlier check during the first snapshot briefly reported incomplete reconstruction; subsequent snapshots converged. This illustrates the documented asynchronous ingestion/publication boundary, and readiness currently proves recent market coverage rather than an atomic source watermark.
+Rebuilt from empty volumes with AKHQ enabled in the default Compose stack. AKHQ returned HTTP 200 and reported healthy. Folded the snapshot ladder/source timestamp columns into `liquidity_metrics_history.sql`, removed the redundant ALTER migration and its Python setup calls, and verified that all 23 remaining migrations are referenced. All three validation scripts passed again after ingestion settled. An earlier check during the first snapshot briefly reported incomplete reconstruction; subsequent snapshots converged. This illustrates the documented asynchronous ingestion/publication boundary, and readiness currently proves recent market coverage rather than an atomic source watermark.
+
+## Daily partitions and current-state replacement
+
+The storage regression in `tests/check_order_storage.py` passed against a disposable ClickHouse 26.8.36.3 server. It loads the actual migration schemas with non-replicated engines and the server's single-node `default` cluster, then exercises the actual Distributed latest-state wrapper and current/live views. With latest-state merges stopped, it verifies maximum-LSN selection, late arrivals, equal-LSN identical redelivery, updates on different ingestion days, and filtering of closed/deleted images. It checks two daily version-history partitions, retained state after history truncation, and physical replacement after a forced merge. This is a semantic regression, not a production performance or replication test; the six-node pipeline checks were not rerun for this change.
+
+Run only against an empty disposable server (the script creates and drops `orderbook_storage_test`):
+
+```bash
+python3 tests/check_order_storage.py | docker exec -i CONTAINER clickhouse-client --multiquery
+```
+
+Existing deployments must migrate or rebuild history tables to acquire the new partition keys; rerunning setup alone only replaces the current-state view. See the operations guide before changing retained data.

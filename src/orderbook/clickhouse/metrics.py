@@ -25,7 +25,7 @@ class MetricsManager:
         """Insert one snapshot of all current market metrics."""
 
         sql = Path(
-            "sql/queries/snapshots/insert_liquidity_snapshot.sql"
+            "sql/02_queries/01_snapshots/insert_liquidity_snapshot.sql"
         ).read_text(encoding="utf-8")
 
         sql = sql.format(database=self.database)
