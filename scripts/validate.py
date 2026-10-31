@@ -21,7 +21,7 @@ def oracle_equal(actual, expected):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--truth', type=Path, default=Path('task/data/ground_truth.json'))
+    parser.add_argument('--truth', type=Path, default=Path('data/ground_truth.json'))
     parser.add_argument('--config', type=Path, default=Path('config/clickhouse.json'))
     args = parser.parse_args()
     truth = json.loads(args.truth.read_text(), parse_float=Decimal, parse_int=Decimal)

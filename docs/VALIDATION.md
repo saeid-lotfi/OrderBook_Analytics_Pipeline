@@ -34,7 +34,7 @@ docker compose exec -T python python scripts/check_pipeline.py
 | Oracle touch comparison | 30/31 literal decimal matches; 31/31 within one oracle binary64 ULP |
 | Independent metric checks | Passed for all 36 markets, including empty sides |
 
-The independent checks cover sorted distinct prices, best/second prices, gaps, spread, crossed flags, base × price notional, inclusive band counts/sums, currency-specific thresholds, insufficient-depth nulls, and fill impacts to 18 fractional places. They found and drove a fix to the previous seven-place fill-impact truncation. Oracle scalar comparison reports one spread discrepancy for BTC_IRT, explained in [FINDINGS.md](FINDINGS.md); the pipeline's decimal subtraction is retained.
+The independent checks cover sorted distinct prices, best/second prices, gaps, spread, crossed flags, base × price notional, inclusive band counts/sums, currency-specific thresholds, insufficient-depth nulls, and fill impacts to 18 fractional places. Fill-impact comparisons allow less than `1e-18` absolute truncation error. Oracle scalar comparison reports one spread discrepancy for BTC_IRT, explained in [FINDINGS.md](FINDINGS.md); the pipeline's decimal subtraction is retained.
 
 On the final run, four completed scheduled inserts averaged **331.5 ms**, with a maximum **363 ms** and peak coordinator query memory **45,390,354 bytes** reported by `system.query_log`. This small sample leaves substantial room within a ten-second interval locally. It is not a production-scale load test, and memory excludes other nodes and background work.
 
@@ -55,13 +55,13 @@ Working copies and supplied originals have identical SHA-256 hashes:
 
 No production pipeline module reads ground truth. The scoring script is a separate read-only tool. TTL clauses were inspected, but seven days of wall-clock retention and long-running disk reclamation were not simulated. Production volume, rolling ingestion failures, source-gap recovery, bot-at-touch rollups and performance optimization remain future work.
 
-## AKHQ and SQL cleanup follow-up
+## Startup convergence
 
-Rebuilt from empty volumes with AKHQ enabled in the default Compose stack. AKHQ returned HTTP 200 and reported healthy. Folded the snapshot ladder/source timestamp columns into `liquidity_metrics_history.sql`, removed the redundant ALTER migration and its Python setup calls, and verified that all 23 remaining migrations are referenced. All three validation scripts passed again after ingestion settled. An earlier check during the first snapshot briefly reported incomplete reconstruction; subsequent snapshots converged. This illustrates the documented asynchronous ingestion/publication boundary, and readiness currently proves recent market coverage rather than an atomic source watermark.
+AKHQ returned HTTP 200 and reported healthy in the clean stack. All three validation scripts passed after ingestion settled. A check during the first snapshot briefly reported incomplete reconstruction; subsequent snapshots converged. Readiness proves recent market coverage rather than an atomic source watermark, so it should not be interpreted as transactional publication.
 
 ## Daily partitions and current-state replacement
 
-The storage regression in `tests/check_order_storage.py` passed against a disposable ClickHouse 26.8.36.3 server. It loads the actual migration schemas with non-replicated engines and the server's single-node `default` cluster, then exercises the actual Distributed latest-state wrapper and current/live views. With latest-state merges stopped, it verifies maximum-LSN selection, late arrivals, equal-LSN identical redelivery, updates on different ingestion days, and filtering of closed/deleted images. It checks two daily version-history partitions, retained state after history truncation, and physical replacement after a forced merge. This is a semantic regression, not a production performance or replication test; the six-node pipeline checks were not rerun for this change.
+The storage regression in `tests/check_order_storage.py` passed against a disposable ClickHouse 26.8.36.3 server. It loads the actual migration schemas with non-replicated engines and the server's single-node `default` cluster, then exercises the actual Distributed latest-state wrapper and current/live views. With latest-state merges stopped, it verifies maximum-LSN selection, late arrivals, equal-LSN identical redelivery, updates on different ingestion days, and filtering of closed/deleted images. It checks two daily version-history partitions, retained state after history truncation, and physical replacement after a forced merge. This is a semantic regression, not a production performance or replication test; the six-node pipeline checks were not rerun at that stage; the submission verification below covers the final deployment.
 
 Run only against an empty disposable server (the script creates and drops `orderbook_storage_test`):
 
@@ -69,4 +69,16 @@ Run only against an empty disposable server (the script creates and drops `order
 python3 tests/check_order_storage.py | docker exec -i CONTAINER clickhouse-client --multiquery
 ```
 
-Existing deployments must migrate or rebuild history tables to acquire the new partition keys; rerunning setup alone only replaces the current-state view. See the operations guide before changing retained data.
+Existing deployments must migrate or rebuild history tables when changing partition keys; rerunning setup alone does not alter table schemas. See the operations guide before changing retained data.
+
+## Submission verification — 2026-10-31
+
+Started the final code with `docker compose up -d --build --wait --wait-timeout 300` against newly created Kafka/ClickHouse volumes. All services became healthy. The migration runner applied all 23 SQL files, creating retained-state destinations before attaching parsing views and attaching Kafka ingestion last.
+
+All three documented validation scripts exited zero: oracle touch agreement remained 30/31 exact and 31/31 within one oracle ULP; scalar agreement was 30/31 with the documented BTC_IRT spread difference. Independent metric checks passed for all 36 markets. Pipeline checks confirmed 16,308 raw messages = 16,282 accepted versions + 26 rejected messages, maximum-LSN reconciliation and three shards with two healthy replicas each.
+
+Reran `diagnostics.sql`: 268/1,580 otherwise-resting orders were older-day images (16.96%); 537/16,308 landed messages were older-day rows (3.29%); crossings fell from 36/36 candidates to zero, with all 36 reference markets retained. Compose configuration, Python syntax, JSON configuration, local documentation links, the 400–800-word memo constraint and `git diff --check` passed. All 23 migration files are referenced exactly once in the runner. This rerun did not repeat the controlled failure experiment, seven-day retention simulation or production-scale benchmarking.
+
+## Dataset path contract
+
+The validator defaults to `data/ground_truth.json`; ingestion uses `data/events.jsonl` and `data/markets.json`. Compose mounts `data/` read-only. After unifying these paths, Python syntax, Compose configuration and path checks passed. Oracle scoring was not rerun for this path-only change because `data/ground_truth.json` is not present in the current workspace; the recorded scores above precede this change. Supply that file before running the documented oracle validation command.

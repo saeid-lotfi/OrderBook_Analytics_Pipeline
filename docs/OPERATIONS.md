@@ -15,7 +15,7 @@ Run commands from the repository root. Python 3.12 and the two pinned direct dep
 | `sql/01_migrations/<layer>/*.sql` | Table/view schemas, routing, predicates, types and TTLs |
 | `sql/02_queries/01_snapshots/insert_liquidity_snapshot.sql` | Persisted snapshot column contract and write settings |
 
-The Kafka engine DDL and producer JSON must agree on broker/topic. These settings are not environment overrides. The previous unused ClickHouse config sections for Kafka, table names and retention were removed because changing them had no effect. Retention belongs to the SQL DDL, and changing an existing table requires an ALTER or the documented clean rebuild. This repository's setup is intended for an empty deployment, not an online conversion of old unreplicated volumes.
+The Kafka engine DDL and producer JSON must agree on broker/topic. These settings are not environment overrides. Retention belongs to the SQL DDL, and changing an existing table requires an ALTER or the documented clean rebuild. This repository's setup is intended for an empty deployment, not an online conversion of old unreplicated volumes.
 
 ## Apply order and tables
 
@@ -26,13 +26,13 @@ The executable apply order is `src/orderbook/clickhouse/migrations.py`, not lexi
 1. Database on all six nodes; `markets.sql` reference table.
 2. `raw_local.sql` and `raw_distributed.sql` landing tables.
 3. `orders_versions_local.sql` / `orders_versions_distributed.sql`, then dead-letter local and Distributed tables.
-4. `mv_raw_to_versions.sql` and `mv_raw_to_dead_letter.sql` parsing views.
-5. `orders_latest_local.sql`, `orders_latest_distributed.sql`, `mv_versions_to_latest.sql`, `orders_current.sql`, then `live_orders.sql`.
+4. `orders_latest_local.sql`, `orders_latest_distributed.sql`, `mv_versions_to_latest.sql`, `orders_current.sql`, then `live_orders.sql`.
+5. `mv_raw_to_versions.sql` and `mv_raw_to_dead_letter.sql` parsing views, after their downstream destinations exist.
 6. `book_levels.sql`, `book_ladders.sql`, then `liquidity_metrics.sql`.
 7. `liquidity_metrics_history.sql` and its Distributed wrapper, then `current_book.sql` and `current_book_levels.sql`.
 8. `kafka_engine.sql` and `kafka_materialized_view.sql` on node 1, after all destinations exist.
 
-DDL is submitted directly to every node instead of using `ON CLUSTER`; the configured six-node list is authoritative for installation. Setup uses CREATE IF NOT EXISTS; selected derivation views use CREATE OR REPLACE. It does not backfill materialized views from existing history. In particular, this is why an old pre-latest-state installation must be rebuilt cleanly. Stopping the worker does not detach Kafka ingestion.
+DDL is submitted directly to every node instead of using `ON CLUSTER`; the configured six-node list is authoritative for installation. Setup uses CREATE IF NOT EXISTS; selected derivation views use CREATE OR REPLACE. It does not backfill materialized views from existing history. Stopping the worker does not detach Kafka ingestion.
 
 | Object | Engine / purpose |
 |---|---|
@@ -56,11 +56,13 @@ DDL is submitted directly to every node instead of using `ON CLUSTER`; the confi
 
 Merges compact latest state eventually. Current-order queries use FINAL on the Distributed latest-state table, propagated to each shard, so correctness does not depend on OPTIMIZE or merge timing. The latest-state partition key depends only on ID, ensuring all versions meet in one partition. Event history retains repeated deliveries for audit; logical current state reconciles them. Deletes must retain their LSN and tombstone; filtering deletes before reconciliation resurrects prior active images.
 
-Raw, accepted-version and dead-letter history use `toYYYYMMDD(ingested_at)` partitions with seven-day row TTLs. Snapshot history already uses `toYYYYMMDD(snapshot_at)`. Daily boundaries use Asia/Tehran, matching the timestamp columns. TTL cleanup remains asynchronous; daily partitions do not round retention down to calendar days. Latest state intentionally retains ID-hash partitions and has no TTL: daily ingestion partitions would split an order's versions across partitions and prevent background replacement across days.
+Raw, accepted-version and dead-letter history use `toYYYYMMDD(ingested_at)` partitions with seven-day row TTLs. Snapshot history uses `toYYYYMMDD(snapshot_at)`. Daily boundaries use Asia/Tehran, matching the timestamp columns. TTL cleanup remains asynchronous; daily partitions do not round retention down to calendar days. Latest state intentionally retains ID-hash partitions and has no TTL: daily ingestion partitions would split an order's versions across partitions and prevent background replacement across days.
 
-### Applying this change to existing data
+### Existing deployments
 
 Setup replaces `orders_current` in place, but CREATE TABLE IF NOT EXISTS does not change existing partition keys. Existing history tables need a controlled rebuild or an explicit table migration; ClickHouse cannot ALTER the partition key in place. Do not drop volumes containing the only retained latest state: seven-day history cannot recover older orders or tombstones. For a data-preserving migration, pause ingestion and snapshot scheduling, drain pending writes and replication, back up retained state, create replacement local history tables with new Keeper paths and daily partitions, copy unexpired history, recreate their Distributed wrappers and materialized-view dependencies, verify counts and LSNs, then switch and resume. Keep old tables until verification is complete. This repository does not automate that online migration. A clean fixture deployment can instead rebuild from the complete preserved source.
+
+The retained latest-state table is not date-partitioned: its 16 ID-hash partitions preserve replacement across days. With no TTL, its distinct-ID population grows, so `FINAL` reconciliation and live-order filtering become more expensive even when the active book stays small. The source-day predicate cannot prune daily partitions here. Monitor rows read, query time and memory; see [the design limitations](README.md#cost-of-calculating-live-orders) for a safe optimization direction.
 
 ## Sharding, replication and failure boundaries
 
@@ -109,6 +111,17 @@ docker compose exec -T python python -m src.orderbook.clickhouse.metrics show
 ```
 
 `src.orderbook.cli produce` deliberately republishes all fixture lines; it is not a resume command. `setup` is its compatibility alias. ClickHouse `setup` creates infrastructure; `setup-typed` targets the typed layer; the other create commands are troubleshooting steps with prerequisites. `metrics snapshot` inserts an additional snapshot and `metrics run --interval N` runs a foreground schedule. Run only one scheduler. The market loader's `load` command replaces reference contents, so stop computation before using it to change markets. To execute a shell in the already-running workspace, use `docker compose exec python bash`.
+
+## Clean fixture rebuild
+
+For a reproducible fixture rerun, the following removes all Kafka and ClickHouse volume data, then rebuilds from the preserved source files. Use it only for a disposable fixture deployment; source bind mounts are retained.
+
+```bash
+docker compose down -v --remove-orphans
+docker compose up -d --build --wait --wait-timeout 300
+```
+
+A partially published fixture needs a clean rebuild because bootstrap only checks whether the topic is nonempty. The historical fixture is not an indefinite replay service: Kafka/raw history expires after seven days. Preserve the original input archive.
 
 ## Monitoring contract
 

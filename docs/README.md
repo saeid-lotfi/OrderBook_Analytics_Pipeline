@@ -1,41 +1,6 @@
-# Order-book analytics pipeline
+# Pipeline design
 
-Reconstructs a limit order book from Kafka CDC events using ClickHouse SQL, then persists liquidity snapshots every ten seconds. Start with [FINDINGS.md](FINDINGS.md) for the measured accuracy and limits. This is a historical replay, not a live exchange feed.
-
-Project documentation lives together here: [operations](OPERATIONS.md), [SQL layout](SQL.md), [validation](VALIDATION.md), and [findings](FINDINGS.md). Run all shell commands from the repository root (the parent of `docs/`). The supplied task definition remains under `task/`.
-
-## Run from a clean checkout
-
-Requirements: Docker Engine with Compose v2, network access for images/packages, and the supplied dataset. Allocate at least 12 GB RAM and 6 CPUs for six ClickHouse processes, Kafka, and Python; this is development guidance, not a production capacity claim. Host ports 8123–8128, 9000–9005, 8080 and 9092 must be free.
-
-Keep the supplied archive unchanged. Place its JSONL stream at `data/events.jsonl` and reference data at `data/markets.json`. In this workspace the supplied stream is also archived as `task/data/events.json`; despite that extension it contains JSONL. Copy it, do not rewrite the original. Validation defaults to `task/data/ground_truth.json`; override `--truth` if your archive is elsewhere. Dataset and task files are deliberately ignored by Git and must accompany a submission through the authorized dataset distribution.
-
-One command starts infrastructure, creates tables, loads markets, publishes the input, waits for ingestion/replication, and starts the snapshot schedule:
-
-```bash
-docker compose up -d --build --wait --wait-timeout 300
-```
-
-`python` becomes healthy only after fresh snapshots cover all 36 reference markets. Initial fixture ingestion can take several minutes. Check `docker compose logs -f python` if startup fails. A broker coordinator-loading warning may occur during initial producer setup and is retried; the delivery summary must report zero failures. A nonzero Compose result means startup did not finish successfully.
-
-```bash
-docker compose exec -T python python scripts/validate.py
-docker compose exec -T python python scripts/check_metrics.py
-docker compose exec -T python python scripts/check_pipeline.py
-```
-
-The validator prints PASS/FAIL per oracle market and exits nonzero for a missing, stale, or incorrect top of book. It separately reports exact decimal matches and agreement within one binary64 ULP of the supplied numeric oracle. Five reference markets are absent from the oracle: three empty books and two bid-only books. They remain visible and are checked to be empty or one-sided. `check_metrics.py` independently checks persisted ladder ordering, levels, bands, notional sums, fill impact and null behavior using Decimal arithmetic. Neither is called by the pipeline.
-
-For a clean rerun after implementation changes (deletes Kafka and ClickHouse data):
-
-```bash
-docker compose down -v --remove-orphans
-docker compose up -d --build --wait --wait-timeout 300
-```
-
-The source dataset is preserved and mounted read-only. To stop while keeping database volumes, use `docker compose down`. A normal worker restart checks whether the Kafka topic already contains records and avoids publishing the fixture again. This is a fixture bootstrap, not a resumable file-offset producer: if publication was interrupted, inspect delivery and ingestion logs and use the clean rebuild above. After seven days Kafka/raw history expires; a fixture-only deployment should be rebuilt rather than treated as an indefinite replay service.
-
-The original files under `task/` are preserved as supplied. Their starter-environment notes describe an earlier topology; the instructions here describe the completed six-node implementation.
+This document explains the topology, book semantics, metric contract and serving behavior for parts A–C and optional sharding. See the [root README](../README.md) for startup, usage, validation commands and the task-to-document map. Read [FINDINGS.md](FINDINGS.md) for the trust assessment required by part D.
 
 ## Topology and data flow
 
@@ -118,10 +83,13 @@ WHERE snapshot_at >= toDateTime('2026-10-30 00:00:00', 'Asia/Tehran')
 
 Snapshots run every ten seconds, subtracting computation time from the interval. The final small-fixture check averaged 331.5 ms across four inserts (363 ms maximum), supporting that cadence locally; see the [validation record](VALIDATION.md) for its limits. If a run takes longer, the next starts immediately; jobs never overlap. `snapshot_at` is the query start time. A market falls out of `current_book` automatically once its latest snapshot is older than 30 seconds, even if historical rows remain. `source_as_of` separately exposes source progress: a fresh computation over the August fixture is still historical data. Production needs feed heartbeat/sequence monitoring; computation freshness alone cannot prove exchange freshness.
 
-Raw events, typed versions, dead letters, and snapshots have seven-day TTLs based on ingestion/snapshot time, not the old fixture's event time. TTL deletion is asynchronous. Raw, dead-letter, version-history and snapshot partitions are daily. The latest-state table has no TTL and compacts to one image per ID, including tombstones. It prevents dormant-order loss or resurrection after history expiry, but distinct historical IDs still accumulate. Safe tombstone retirement requires a replay watermark and authoritative checkpoint; arbitrary expiry would sacrifice correctness.
+Raw events, typed versions, dead letters, and snapshots have seven-day TTLs based on ingestion/snapshot time, not the old fixture's event time. TTL deletion is asynchronous. Raw, dead-letter, version-history and snapshot partitions are daily. The latest-state table uses 16 ID-hash partitions, has no TTL and compacts to one image per ID, including tombstones. It prevents dormant-order loss or resurrection after history expiry, but distinct historical IDs still accumulate. Safe tombstone retirement requires a replay watermark and authoritative checkpoint; arbitrary expiry would sacrifice correctness.
 
-## Task coverage and next stage
 
-A: Kafka ingestion, exact decimals, LSN reconciliation, replicated storage, rejection capture, explicit timezone and retention. B: documented resting predicate, measured heuristic, aggregated levels, all required metrics and crossed flags. C: scheduled persisted books, automatic freshness expiry, levels and seven-day history. D: validation script and [400–800-word findings memo](FINDINGS.md). Optional E: implemented sharding/replication plus operational alert queries; per-order distance and bot-participation rollups are deferred. Bots are included in the reconstructed liquidity.
+## Cost of calculating live orders
 
-With another day: benchmark 340 markets / 70 million versions, reduce repeated scans and network aggregation, add source watermarks and atomic batch publication, test rolling failures under ongoing ingestion, and plan latest-state/tombstone archival. These are the next optimization and production-hardening stage; no production-scale throughput claim is made here.
+`orders_latest_local` is partitioned by `cityHash64(id) % 16`, not by date, and sorted by `id`. Versions of an order must meet in the same partition for background replacement, including updates and deletes arriving on different days. Daily version and snapshot histories have seven-day TTLs; retained latest state does not.
+
+Consequently, `orders_current FINAL` and the `live_orders` predicate operate over a retained population that grows with distinct order IDs, including closed orders and tombstones. The source-day filter in `book_levels` does not provide date-partition pruning on this table. A small final live book therefore does not imply a cheap reconstruction. Snapshot computation can scan retained state repeatedly for the source-date cutoff, source watermark and ladders, with distributed aggregation adding network cost. The ten-second cadence is validated only on the supplied fixture.
+
+Production work should measure rows read, duration and memory as retained IDs grow, reduce repeated scans, and maintain an incrementally updated active-order projection backed by authoritative checkpoints. Retire closed state and tombstones only with a replay watermark that prevents old messages from resurrecting orders. Adding a date partition or arbitrary TTL to latest state alone would compromise reconciliation.

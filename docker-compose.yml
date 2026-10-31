@@ -173,7 +173,6 @@ services:
     volumes:
       - .:/workspace
       - ./data:/workspace/data:ro
-      - ./task:/workspace/task:ro
     healthcheck:
       test: [CMD, python, -m, src.orderbook.health]
       interval: 10s

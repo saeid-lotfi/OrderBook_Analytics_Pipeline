@@ -50,9 +50,9 @@ Use the documented Compose startup command. The [migration runner](../src/orderb
 
 1. Create the database and reference table.
 2. Create raw landing tables.
-3. Create order-version and dead-letter destinations, then their parsing views.
-4. Create retained latest-order storage and its materialized view, then current orders.
-5. Create resting-order, level, ladder and metric views.
+3. Create order-version and dead-letter destinations.
+4. Create retained latest-order storage and its materialized view, then current and resting-order views.
+5. Attach raw-event parsing views, then create level, ladder and metric views.
 6. Create snapshot-history tables, then serving views.
 7. Attach Kafka ingestion after every downstream destination exists.
 
